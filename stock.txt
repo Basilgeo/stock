@@ -1,0 +1,82 @@
+ // Get stock details for a portfolio
+    @GetMapping("/getAllStocks")
+    public ResponseEntity<StockdetailsData> getAllStocks(@RequestParam("portfolioId") String portfolioId) throws PortfolioNotFoundException {
+        return new ResponseEntity<>(portfolioServices.getAllStocks(portfolioId), HttpStatus.OK);
+    }
+
+    // Get stock details by stock ID
+    @GetMapping("/getStockById/{id}")
+    public ResponseEntity<StockTemplate> getAllStocksDetails(@PathVariable("id") String id) {
+        return new ResponseEntity<>(portfolioServices.getAllStocksDetails(id), HttpStatus.OK);
+    }
+    //    to get all details of stocks by stockId
+    public StockTemplate getAllStocksDetails(String stockId) {
+        return webClient.get().uri("http://localhost:8081/stock/" + stockId).retrieve()
+                .bodyToMono(StockTemplate.class).block();
+    }
+
+
+ public StockdetailsData getAllStocks(String portfolioId) throws PortfolioNotFoundException {
+        // Retrieve the portfolio by ID or throw an exception if it doesn't exist
+        Portfolio portfolio = portfolioRepository.findById(portfolioId)
+                .orElseThrow(() -> new PortfolioNotFoundException("Portfolio with id " + portfolioId + " not found"));
+
+        // Get the list of stocks in the portfolio
+        List<Stock> portfolioStocks = portfolio.getStocks();
+
+        // If the portfolio has no stocks, return an empty StockdetailsData
+        if (portfolioStocks.isEmpty()) {
+            return new StockdetailsData(); // No stocks in the portfolio.
+        }
+
+        // Create a comma-separated string of stock IDs from the portfolio stocks
+        String stockIds = portfolioStocks.stream()
+                .map(Stock::getStockId)
+                .collect(Collectors.joining(","));
+
+        // Retrieve stock templates for the stock IDs from a web service
+        List<StockTemplate> templates = webClient.get()
+                .uri("http://localhost:8081/stock/getAll/" + stockIds)
+                .retrieve()
+                .bodyToFlux(StockTemplate.class)
+                .collectList()
+                .block();
+
+        // Initialize lists and variables for stock details, returns, and balance
+        List<Stockdetails> stockList = new ArrayList<>();
+        double returns = 0;
+        double balance = 0;
+
+        // Iterate through each stock in the portfolio
+        for (Stock stock : portfolioStocks) {
+            // Find the corresponding stock template, if it exists
+            StockTemplate stockTemplate = templates.stream()
+                    .filter(t -> t.getId().equals(stock.getStockId()))
+                    .findFirst()
+                    .orElse(null);
+
+            // If a stock template is found, create stock details and calculate returns and balance
+            if (stockTemplate != null) {
+                Stockdetails stockDetails = new Stockdetails();
+                stockDetails.setStock(stock);
+                double holdings = stockTemplate.getCurrentPrice() * stock.getQuantity();
+                stockDetails.setHoldings(holdings);
+                stockDetails.setReturns(holdings - (stock.getTotalBuy() - stock.getTotalSell()));
+                stockDetails.setCurrentPrice(stockTemplate.getCurrentPrice());
+                stockDetails.setPriceChangePercentage24h(stockTemplate.getPriceChangePercentage24h());
+                stockDetails.setPriceChange24h(stockTemplate.getPriceChange24h());
+                stockList.add(stockDetails);
+
+                returns += stockDetails.getReturns();
+                balance += stockDetails.getHoldings();
+            }
+        }
+
+        // Create a StockdetailsData object and set its properties
+        StockdetailsData stockdetailsList = new StockdetailsData();
+        stockdetailsList.setStockDetails(stockList);
+        stockdetailsList.setTotalReturns(returns);
+        stockdetailsList.setTotalBalance(balance);
+
+        return stockdetailsList;
+    }
